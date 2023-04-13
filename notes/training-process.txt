@@ -1,0 +1,32 @@
+1. pass --train parameter to execute setupModelTraining function
+2. load browser instance with muted audio and go to localhost
+3. wait for Runner instance to be defined
+4. create proxy using loaded page with functions jump, duck, stand, speed, obstacles, restart i crashed
+	5. load existing model using tf.loadLayersModel (folder with json and .bin file)
+	6. compile model because we cannot fit or evalute model before it's compiled
+		- adam optimizer
+		- loss mean squared error
+7. train deno model function
+	epsilon = epsilonStart
+	episodeReward = 0
+	run the loop
+		restart the game
+		preprocess the game data with obstacles and speed
+			- if no obstacles return empty 2d tensor
+			- if obstacles return tensor with x pos, width, y pos and [1, 4] shape
+		select action based on the model, state and epsilon
+			- if Math.random < epsilon choose random action
+			- else select action based on prediction's max Q value
+		performAction (jump, duck or stand)
+		tf.nextFrame()
+		preprocess game data again
+		detect if it crashed
+		compute reward
+		add to episodeReward
+		done = boolean (crashed)
+		add to memory (state, action, reward, nextState, done)
+		state = nextState
+		- if memory.buffer is full create shuffled array of samples and calculate loss		(optimize the model) 
+		- if done, write to logs and set episodeReward to 0
+		epsilon = epsilonEnd + (epsilonStart - epsilonEnd) * Math.exp(-1 * episode / 		epsilonDecay);
+8. save the model to local file system

@@ -1,0 +1,9 @@
+The Memory class is a data structure that stores past experiences (state, action, reward, next state, and done) of the agent during the reinforcement learning process. It is important for the following reasons:
+
+Experience replay: The class implements a circular buffer of fixed size, which is used to store and sample past experiences. The purpose of this is to break the correlations between consecutive samples and improve the stability of the learning process. Experience replay is a crucial technique in many reinforcement learning algorithms, such as Deep Q-Learning (DQN).
+
+Balancing exploration and exploitation: By storing and sampling past experiences, the agent can learn from previous steps while continuing to explore the environment. This enables a balance between exploration (trying new actions) and exploitation (using the best-known actions) during the learning process.
+
+Offline learning: By sampling experiences from the memory buffer, the agent can learn in an "offline" manner, meaning it can learn from past experiences without interacting with the environment. This can be more efficient and help to stabilize the learning process.
+
+In summary, the Memory class is essential for the reinforcement learning model because it stores past experiences, supports experience replay, balances exploration and exploitation, and allows for offline learning.

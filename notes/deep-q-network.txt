@@ -1,0 +1,26 @@
+experience replay - agents experiences stored in sets that represent replay memory:
+At time t, agents experiences(et) are defined as et = (st, at, rt + 1, st + 1)
+St - state of environment at the time t
+At - action taken at time t
+Rt - reward as the result of previous experiences
+St + 1 - next state of the environment
+et - summary of experiences of agent at time t
+all experiences of agent in every episode at every timestampt are saved in replay memory
+If N = 6, memory will store last 6 experiences in replay memory, from this dataset we'll take samples to train the network
+State is passed in environment where we'll get result of possible actions that can be performed
+In every timestamp of every episode we either execute the action that has biggest Q value or we explore the environment and choose random action
+Choosen action is being executed in the emulator, we observe the reward and next state in the environment, then we store whole et in replay memory
+
+1. Inicialize memory
+2. Put random weights in the network
+3. Choose action to perform
+
+Training process of one episode:
+After storing data in replay memory, random batch from that memory gets choosen
+	St- preprocess state using greyscale, cropping etc.
+	pass preprocessed state into network as an input
+	for state it's useful to use stack of frames to have better context about state of the environment (speed, direction...)
+	from state we get array of outputs with Q values, the output that has biggest Q value will be choosen
+	e4 = (s4, a4, r5, s5), we use state' and action'
+	caluculate the difference between target Q values and output Q values
+	gradient descent updates weights in the network to reduce the loss

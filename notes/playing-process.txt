@@ -1,0 +1,19 @@
+1. pass --play parameter to execute playTheGame function
+2. load browser instance with muted audio and go to localhost
+3. wait for Runner instance to be defined
+4. create proxy using loaded page with functions jump, duck, stand, speed, obstacles, restart i crashed
+5. load existing model using tf.loadLayersModel (folder with json and .bin file)
+6. compile model because we cannot fit or evalute model before it's compiled
+	- adam optimizer
+	- loss mean squared error
+7. run gameLoopPlay
+	- restart proxy
+	- jump to start the game
+	- get state by preprocessing
+	- run endless while loop:
+		- get input tensor from state
+		- choose action by prediction
+		- perform action
+		- exectute next frame
+		- get new state
+			- if crashed, restart and get state again
