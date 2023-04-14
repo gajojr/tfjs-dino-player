@@ -117,8 +117,9 @@ async function playTheGame() {
         model = await tf.loadLayersModel('file://./dino-chrome-model/model.json');
         console.log('Model loaded'.green);
         model.compile({ // Compile the loaded model
-            optimizer: tf.train.adam(),
+            optimizer: tf.train.adam(0.001),
             loss: tf.losses.meanSquaredError,
+            metrics: ['accuracy']
         });
     } catch (error) {
         console.log(error);
