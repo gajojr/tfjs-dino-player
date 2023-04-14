@@ -104,7 +104,7 @@ async function createModel() {
 
     model.compile({
         optimizer: tf.train.adam(0.001),
-        loss: 'categoricalCrossentropy',
+        loss: tf.losses.meanSquaredError,
         metrics: ['accuracy'],
     });
 
