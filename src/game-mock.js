@@ -118,8 +118,7 @@ async function playTheGame() {
         console.log('Model loaded'.green);
         model.compile({ // Compile the loaded model
             optimizer: tf.train.adam(0.01),
-            loss: tf.losses.meanSquaredError,
-            metrics: ['accuracy']
+            loss: tf.losses.meanSquaredError
         });
     } catch (error) {
         console.log(error);

@@ -104,8 +104,7 @@ async function createModel() {
 
     model.compile({
         optimizer: tf.train.adam(0.01),
-        loss: tf.losses.meanSquaredError,
-        metrics: ['accuracy'],
+        loss: tf.losses.meanSquaredError
     });
 
     return model;
@@ -133,8 +132,7 @@ async function setupModelTraining() {
         console.log('Loaded saved model'.green);
         model.compile({ // Compile the loaded model
             optimizer: tf.train.adam(0.01),
-            loss: tf.losses.meanSquaredError,
-            metrics: ['accuracy']
+            loss: tf.losses.meanSquaredError
         });
     } catch (error) {
         console.log('No saved model found, creating a new one'.yellow);
