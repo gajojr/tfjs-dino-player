@@ -8,12 +8,11 @@ const { computeReward, selectAction, performAction, proxy } = require('../src/ga
 
 function preprocessGameData(obstacles, speed) {
     if (obstacles.length === 0) {
-        return tf.tensor3d([0, 0, 0, speed], [1, 4, 1]);
+        return tf.tensor2d([0, 0, 0, speed], [1, 4]);
     }
 
     const obstacle = obstacles[0];
-    const obstacleTensor = tf.tensor2d([obstacle.xPos, obstacle.width, obstacle.yPos, speed], [1, 4]);
-    return obstacleTensor.reshape([1, 4, 1]);
+    return tf.tensor2d([obstacle.xPos, obstacle.width, obstacle.yPos, speed], [1, 4]);
 }
 
 // update the target model's weights with the online model's weights
@@ -91,15 +90,15 @@ async function optimizeModel(onlineModel, targetModel, experiences, gamma, batch
         const targetInputTensor = tf.tensor2d([Array.from(nextState.dataSync())]);
         const targetModelNextQValues = targetModel.predict(targetInputTensor);
 
-        const nextQValue = targetModelNextQValues
-            .gather([tf.argMax(onlineModelNextQValues, axis = 1, outputDtype = 'int32')])
-            .squeeze();
+        const reshapedOnlineModelNextQValues = onlineModelNextQValues.reshape([1, -1]);
+        const nextQValueIndex = await tf.argMax(reshapedOnlineModelNextQValues, axis = 1).data();
+        const nextQValue = targetModelNextQValues.dataSync()[nextQValueIndex];
 
         let targetQValue;
         if (done) {
             targetQValue = reward;
         } else {
-            targetQValue = reward + gamma * nextQValue.dataSync()[0];
+            targetQValue = reward + gamma * nextQValue;
         }
 
         const targetArray = Array.from(onlineModelQValues.dataSync());
