@@ -111,18 +111,18 @@ async function playTheGame() {
     await page.waitForFunction('Runner.instance_ !== undefined');
     const gameProxy = await proxy(page);
 
-    // Load the saved model
+    // Load the saved target model
     let model;
     try {
-        model = await tf.loadLayersModel('file://./dino-chrome-model/model.json');
-        console.log('Model loaded'.green);
+        model = await tf.loadLayersModel('file://./dino-chrome-model/main/model.json');
+        console.log('Target model loaded'.green);
         model.compile({ // Compile the loaded model
             optimizer: tf.train.adam(0.001),
             loss: tf.losses.meanSquaredError
         });
     } catch (error) {
         console.log(error);
-        console.log('No model found, please train the model first'.red);
+        console.log('No target model found, please train the model first'.red);
         process.exit();
     }
 

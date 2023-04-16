@@ -1,6 +1,6 @@
 # Dino Player Reinforcement Learning Model
 
-This model is built using [TensorFlow.js](https://www.tensorflow.org/js) Node.js implementation and it's using the DQN algorithm to play the Dino Chrome game. Browser automation is done using [Puppeteer](https://pptr.dev/).
+This model is built using [TensorFlow.js](https://www.tensorflow.org/js) Node.js implementation and it's using the DDQN algorithm to play the Dino Chrome game. Browser automation is done using [Puppeteer](https://pptr.dev/).
 
 ## Steps
 

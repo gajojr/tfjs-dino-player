@@ -8,14 +8,21 @@ const { computeReward, selectAction, performAction, proxy } = require('../src/ga
 
 function preprocessGameData(obstacles, speed) {
     if (obstacles.length === 0) {
-        return tf.tensor2d([0, 0, 0, speed], [1, 4]);
+        return tf.tensor3d([0, 0, 0, speed], [1, 4, 1]);
     }
 
     const obstacle = obstacles[0];
-    return tf.tensor2d([obstacle.xPos, obstacle.width, obstacle.yPos, speed], [1, 4]);
+    const obstacleTensor = tf.tensor2d([obstacle.xPos, obstacle.width, obstacle.yPos, speed], [1, 4]);
+    return obstacleTensor.reshape([1, 4, 1]);
 }
 
-async function trainDinoModel(model, proxy, episodes, memory, batchSize, gamma, epsilonStart, epsilonEnd, epsilonDecay) {
+// update the target model's weights with the online model's weights
+async function updateTargetModel(onlineModel, targetModel) {
+    const onlineWeights = onlineModel.getWeights();
+    await targetModel.setWeights(onlineWeights);
+}
+
+async function trainDinoModel(onlineModel, targetModel, proxy, episodes, memory, batchSize, gamma, epsilonStart, epsilonEnd, epsilonDecay, targetUpdateFrequency) {
     let epsilon = epsilonStart;
     let episodeReward = 0;
 
@@ -31,7 +38,7 @@ async function trainDinoModel(model, proxy, episodes, memory, batchSize, gamma, 
         let done = false;
 
         while (!done) {
-            const action = await selectAction(model, state, epsilon);
+            const action = await selectAction(onlineModel, state, epsilon);
             performAction(action, proxy);
 
             await tf.nextFrame();
@@ -47,52 +54,64 @@ async function trainDinoModel(model, proxy, episodes, memory, batchSize, gamma, 
 
             if (memory.buffer.length >= batchSize) {
                 const experiences = memory.sample(batchSize);
-                const loss = await optimizeModel(model, experiences, gamma);
+                const loss = await optimizeModel(onlineModel, targetModel, experiences, gamma, batchSize);
                 console.log('Loss:', loss);
             }
 
-            if (done) {
-                fs.appendFile('logs.txt', `Episode: ${episode + 1}, Epsilon: ${epsilon}, Total Reward: ${episodeReward}\n`)
-                    .catch((err) => {
-                        console.error('Failed to write to logs.txt:', err.message);
-                    });
-                episodeReward = 0;
-                // console.log(`Episode: ${episode + 1}, Epsilon: ${epsilon}`);
-            }
             // Decay epsilon (exploration rate)
             epsilon = epsilonEnd + (epsilonStart - epsilonEnd) * Math.exp(-1 * episode / epsilonDecay);
         }
+
+        // Update the target model's weights periodically
+        if ((episode + 1) % targetUpdateFrequency === 0) {
+            await updateTargetModel(onlineModel, targetModel);
+        }
+
+        // log after every episode and set episodeReward to 0
+        fs.appendFile('logs.txt', `Episode: ${episode + 1}, Epsilon: ${epsilon}, Total Reward: ${episodeReward}\n`)
+            .catch((err) => {
+                console.error('Failed to write to logs.txt:', err.message);
+            });
+        episodeReward = 0;
     }
 }
 
-function optimizeModel(model, experiences, gamma) {
+async function optimizeModel(onlineModel, targetModel, experiences, gamma, batchSize) {
     const inputs = [];
     const targets = [];
 
     for (const { state, action, reward, nextState, done }
         of experiences) {
         const inputTensor = tf.tensor2d([Array.from(state.dataSync())]);
-        const target = model.predict(inputTensor);
+        const onlineModelQValues = onlineModel.predict(inputTensor);
+
         const nextInputTensor = tf.tensor2d([Array.from(nextState.dataSync())]);
-        const nextQValues = model.predict(nextInputTensor);
+        const onlineModelNextQValues = onlineModel.predict(nextInputTensor);
+
+        const targetInputTensor = tf.tensor2d([Array.from(nextState.dataSync())]);
+        const targetModelNextQValues = targetModel.predict(targetInputTensor);
+
+        const nextQValue = targetModelNextQValues
+            .gather([tf.argMax(onlineModelNextQValues, axis = 1, outputDtype = 'int32')])
+            .squeeze();
 
         let targetQValue;
         if (done) {
             targetQValue = reward;
         } else {
-            targetQValue = reward + gamma * nextQValues.max().dataSync()[0];
+            targetQValue = reward + gamma * nextQValue.dataSync()[0];
         }
 
-        const targetArray = Array.from(target.dataSync());
+        const targetArray = Array.from(onlineModelQValues.dataSync());
         targetArray[action] = targetQValue;
-        inputs.push(state.dataSync());
+        inputs.push(Array.from(state.dataSync()));
         targets.push(targetArray);
     }
 
     const inputTensor = tf.tensor2d(inputs);
     const targetTensor = tf.tensor2d(targets);
 
-    return model.fit(inputTensor, targetTensor, { epochs: 1 }).then((history) => history.history.loss[0]);
+    return onlineModel.fit(inputTensor, targetTensor, { epochs: 1, batchSize, shuffle: true }).then((history) => history.history.loss[0]);
 }
 
 async function createModel() {
@@ -128,7 +147,7 @@ async function setupModelTraining() {
     // Load the saved model or create a new one if it doesn't exist
     let model;
     try {
-        model = await tf.loadLayersModel('file://./dino-chrome-model/model.json');
+        model = await tf.loadLayersModel('file://./dino-chrome-model/main/model.json');
         console.log('Loaded saved model'.green);
         model.compile({ // Compile the loaded model
             optimizer: tf.train.adam(0.001),
@@ -139,6 +158,20 @@ async function setupModelTraining() {
         model = await createModel();
     }
 
+    // Load the target model from the same file location as the main model
+    let targetModel;
+    try {
+        targetModel = await tf.loadLayersModel('file://./dino-chrome-model/main/model.json');
+        console.log('Loaded target model'.green);
+        targetModel.compile({
+            optimizer: tf.train.adam(0.001),
+            loss: tf.losses.meanSquaredError
+        });
+    } catch (error) {
+        console.log('No target model found, cloning the main model'.yellow);
+        targetModel = await createModel();
+    }
+
     const episodes = 1000;
     const memory = new Memory(100000);
     const batchSize = 32;
@@ -146,11 +179,14 @@ async function setupModelTraining() {
     const epsilonStart = 1.0; // Initial exploration rate
     const epsilonEnd = 0.01; // Final exploration rate
     const epsilonDecay = 200; // Decay rate for exploration
+    const targetUpdateFrequency = 50; // How often to update the target model
 
     const saveAndExit = async() => {
-        console.log('Saving model before exit...'.green);
-        await model.save('file://./dino-chrome-model');
-        console.log('Model saved successfully.'.green);
+        console.log('Saving models before exit...'.green);
+        await model.save('file://./dino-chrome-model/main');
+        console.log('Main model saved successfully.'.green);
+        await targetModel.save('file://./dino-chrome-model/target');
+        console.log('Target model saved successfully.'.green);
         process.exit();
     };
 
@@ -173,13 +209,14 @@ async function setupModelTraining() {
 
     // Train the model here (additionally or for the first time)
     try {
-        await trainDinoModel(model, gameProxy, episodes, memory, batchSize, gamma, epsilonStart, epsilonEnd, epsilonDecay);
+        await trainDinoModel(model, targetModel, gameProxy, episodes, memory, batchSize, gamma, epsilonStart, epsilonEnd, epsilonDecay, targetUpdateFrequency);
     } catch (error) {
         console.error(`Error during training: ${error}`);
     }
 
-    // Save the model to disk storage in the same folder
-    await model.save('file://./dino-chrome-model');
+    // Save the models to disk storage in separate folders
+    await model.save('file://./dino-chrome-model/main');
+    await targetModel.save('file://./dino-chrome-model/target');
 }
 
 module.exports = {
