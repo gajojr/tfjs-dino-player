@@ -103,7 +103,7 @@ async function createModel() {
     model.add(tf.layers.dense({ units: 3, activation: 'softmax' }));
 
     model.compile({
-        optimizer: tf.train.adam(0.01),
+        optimizer: tf.train.adam(0.001),
         loss: tf.losses.meanSquaredError
     });
 
@@ -131,7 +131,7 @@ async function setupModelTraining() {
         model = await tf.loadLayersModel('file://./dino-chrome-model/model.json');
         console.log('Loaded saved model'.green);
         model.compile({ // Compile the loaded model
-            optimizer: tf.train.adam(0.01),
+            optimizer: tf.train.adam(0.001),
             loss: tf.losses.meanSquaredError
         });
     } catch (error) {
@@ -142,7 +142,7 @@ async function setupModelTraining() {
     const episodes = 1000;
     const memory = new Memory(100000);
     const batchSize = 32;
-    const gamma = 0.99; // Discount factor
+    const gamma = 0.9; // Discount factor
     const epsilonStart = 1.0; // Initial exploration rate
     const epsilonEnd = 0.01; // Final exploration rate
     const epsilonDecay = 200; // Decay rate for exploration
