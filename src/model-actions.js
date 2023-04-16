@@ -91,8 +91,14 @@ async function optimizeModel(onlineModel, targetModel, experiences, gamma, batch
         const targetModelNextQValues = targetModel.predict(targetInputTensor);
 
         const reshapedOnlineModelNextQValues = onlineModelNextQValues.reshape([1, -1]);
-        const nextQValueIndex = await tf.argMax(reshapedOnlineModelNextQValues, axis = 1).data();
-        const nextQValue = targetModelNextQValues.dataSync()[nextQValueIndex];
+
+        // Use tf.tidy() and tf.keep() to manage memory efficiently
+        let nextQValue;
+        tf.tidy(() => {
+            const nextQValueIndex = onlineModelNextQValues.argMax(1);
+            const nextQValueTensor = tf.keep(targetModelNextQValues.gather(nextQValueIndex, 1));
+            nextQValue = nextQValueTensor.dataSync()[0];
+        });
 
         let targetQValue;
         if (done) {
@@ -105,6 +111,14 @@ async function optimizeModel(onlineModel, targetModel, experiences, gamma, batch
         targetArray[action] = targetQValue;
         inputs.push(Array.from(state.dataSync()));
         targets.push(targetArray);
+
+        inputTensor.dispose();
+        onlineModelQValues.dispose();
+        nextInputTensor.dispose();
+        onlineModelNextQValues.dispose();
+        targetInputTensor.dispose();
+        targetModelNextQValues.dispose();
+        reshapedOnlineModelNextQValues.dispose();
     }
 
     const inputTensor = tf.tensor2d(inputs);
