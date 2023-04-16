@@ -72,7 +72,6 @@ function computeReward(crashed) {
     return crashed ? -1 : 0.1;
 }
 
-// game loop for playing
 async function gameLoopPlay(proxy, model) {
     await proxy.restart();
     await proxy.jump(); // jump to start the game
@@ -81,13 +80,17 @@ async function gameLoopPlay(proxy, model) {
 
     while (true) {
         const inputTensor = tf.tensor2d([Array.from(state.dataSync())]);
-        const action = (await model.predict(inputTensor).argMax(-1).data())[0];
+        const qValues = model.predict(inputTensor);
+        const action = (await qValues.argMax(-1).data())[0];
 
         await performAction(action, proxy);
 
         await tf.nextFrame();
 
         state = preprocessGameData(await proxy.obstacles(), await proxy.speed());
+
+        inputTensor.dispose();
+        qValues.dispose();
 
         if (await proxy.crashed()) {
             await proxy.restart();
