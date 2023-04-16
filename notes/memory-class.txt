@@ -6,4 +6,4 @@ Balancing exploration and exploitation: By storing and sampling past experiences
 
 Offline learning: By sampling experiences from the memory buffer, the agent can learn in an "offline" manner, meaning it can learn from past experiences without interacting with the environment. This can be more efficient and help to stabilize the learning process.
 
-In summary, the Memory class is essential for the reinforcement learning model because it stores past experiences, supports experience replay, balances exploration and exploitation, and allows for offline learning.
+Memory class is essential for the reinforcement learning model because it stores past experiences, supports experience replay, balances exploration and exploitation, and allows for offline learning.

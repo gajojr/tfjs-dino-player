@@ -1,32 +1,55 @@
-1. pass --train parameter to execute setupModelTraining function
-2. load browser instance with muted audio and go to localhost
-3. wait for Runner instance to be defined
-4. create proxy using loaded page with functions jump, duck, stand, speed, obstacles, restart i crashed
-	5. load existing model using tf.loadLayersModel (folder with json and .bin file)
-	6. compile model because we cannot fit or evalute model before it's compiled
-		- adam optimizer
-		- loss mean squared error
-7. train deno model function
-	epsilon = epsilonStart
-	episodeReward = 0
-	run the loop
-		restart the game
-		preprocess the game data with obstacles and speed
-			- if no obstacles return empty 2d tensor
-			- if obstacles return tensor with x pos, width, y pos and [1, 4] shape
-		select action based on the model, state and epsilon
-			- if Math.random < epsilon choose random action
-			- else select action based on prediction's max Q value
-		performAction (jump, duck or stand)
-		tf.nextFrame()
-		preprocess game data again
-		detect if it crashed
-		compute reward
-		add to episodeReward
-		done = boolean (crashed)
-		add to memory (state, action, reward, nextState, done)
-		state = nextState
-		- if memory.buffer is full create shuffled array of samples and calculate loss		(optimize the model) 
-		- if done, write to logs and set episodeReward to 0
-		epsilon = epsilonEnd + (epsilonStart - epsilonEnd) * Math.exp(-1 * episode / 		epsilonDecay);
-8. save the model to local file system
+1. Define a function called preprocessGameData that preprocesses the data from the game environment to create tensors that will be fed to the neural network.
+
+2. Define a function called updateTargetModel that updates the weights of the target model with the weights of the online model.
+
+3. Define a function called trainDinoModel that implements the training loop for the model.
+
+4. Inside the trainDinoModel function, initialize epsilon and episodeReward variables to 0.
+
+5. For each episode, reset the game environment and initialize the state variable.
+
+6. In the while loop, select an action using the selectAction function.
+
+7. Perform the selected action using the performAction function.
+
+8. Obtain the next state of the game environment and compute the reward and done flags.
+
+9. Add the state, action, reward, next state, and done to the memory buffer.
+
+10. If the memory buffer has enough experiences, sample experiences from it and optimize the online model using the optimizeModel function.
+
+11. Decay the exploration rate epsilon.
+
+12. Update the target model weights periodically.
+
+13. Log the results for each episode and reset the episode reward variable.
+
+14. Define a function called optimizeModel that optimizes the online model using a batch of experiences.
+
+15. Inside the optimizeModel function, compute the online and target model Q-values and the target Q-value.
+
+16. Compute the loss and update the online model.
+
+17. Define a function called createModel that creates a new neural network model.
+
+18. Define a function called launchBrowser that launches a puppeteer browser and navigates to the game environment.
+
+19. Define a function called setupModelTraining that sets up the training process.
+
+20. Inside the setupModelTraining function, load the saved model or create a new one if it does not exist.
+
+21. Load the target model from the same file location as the main model.
+
+22. Define the hyperparameters for the training process.
+
+23. Define a function called saveAndExit that saves the models before exiting.
+
+24. Handle the SIGINT signal (Ctrl + C) using readline.
+
+25. Handle uncaught exceptions.
+
+26. Train the model using the trainDinoModel function.
+
+27. Save the models to disk storage in separate folders.
+
+The provided code implements all of these steps to train a DDQN model to play the dinosaur game.
