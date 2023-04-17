@@ -132,7 +132,7 @@ async function createModel() {
     model.add(tf.layers.dense({ units: 128, activation: 'relu', inputShape: [4] }));
     model.add(tf.layers.dense({ units: 64, activation: 'relu' }));
     model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
-    model.add(tf.layers.dense({ units: 3, activation: 'softmax' }));
+    model.add(tf.layers.dense({ units: 3, activation: 'linear' }));
 
     model.compile({
         optimizer: tf.train.adam(0.001),
