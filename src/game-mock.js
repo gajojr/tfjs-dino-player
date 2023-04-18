@@ -30,7 +30,10 @@ const proxy = async(page) => {
         return obstacleData;
     };
 
-    const restart = async() => await page.evaluate(() => Runner.instance_.restart());
+    const restart = async() => await page.evaluate(() => {
+        Runner.instance_.restart()
+        Runner.instance_.tRex.xPos = 15;
+    });
 
     const crashed = async() => {
         const isCrashed = await page.evaluate(() => Runner.instance_.crashed);
