@@ -5,6 +5,7 @@ const colors = require('colors');
 const fs = require('fs').promises;
 const Memory = require('../src/Memory');
 const { performAction, proxy } = require('../src/game-mock');
+const NoisyDense = require('./NoisyDense');
 
 function obstacleToVector(obstacle, vector, offset) {
     // Minimum distance (crash): 19
@@ -12,9 +13,9 @@ function obstacleToVector(obstacle, vector, offset) {
     // Convert distance into int from 0-39.
     const distance = Math.min(39, Math.max(0, ~~((obstacle.xPos - 19) / 16)));
     vector[offset + distance] = 1;
-    vector[offset+40] = obstacle.yPos;
-    vector[offset+41] = obstacle.width;
-    vector[offset+42] = obstacle.size;
+    vector[offset + 40] = obstacle.yPos;
+    vector[offset + 41] = obstacle.width;
+    vector[offset + 42] = obstacle.size;
 }
 
 function stateToTensor(state) {
@@ -27,11 +28,11 @@ function stateToTensor(state) {
     // [86]: jumping? 0/1
     // [87]: y-position of t-rex
     let vector = [
-        0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,0
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0
     ];
 
     const obstacles = state.obstacles;
@@ -92,9 +93,13 @@ async function trainDinoModel(onlineModel, targetModel, proxy, episodes, memory,
             // will take some time.
             if (memory.buffer.length >= batchSize) {
                 try {
-                    const experiences = memory.sample(batchSize);
-                    const loss = await optimizeModel(onlineModel, targetModel, experiences, gamma, batchSize);
-                    //console.log('Loss:', loss);
+                    const { samples, sampleIndices } = memory.sample(batchSize);
+                    const loss = await optimizeModel(onlineModel, targetModel, samples, gamma, batchSize);
+                    const priorities = samples.map((_sample, index) => loss[index]);
+                    for (let i = 0; i < batchSize; i++) {
+                        const index = sampleIndices[i];
+                        memory.add(memory.buffer[index].experience, priorities[i]);
+                    }
                 } catch (e) {
                     console.log(e);
                 }
@@ -116,30 +121,27 @@ async function trainDinoModel(onlineModel, targetModel, proxy, episodes, memory,
                 if (!nextState.done) {
                     console.warn("Time delta < 40 ms or > 60ms: " + timeDelta);
                 }
-            }
-            else {
+            } else {
                 const nextStateTensor = stateToTensor(nextState);
 
                 let reward;
                 if (nextState.done) {
                     reward = -1;
-                }
-                else if (action === 1) {
+                } else if (action === 1) {
                     /* experiment: make jumps expensive to avoid random jumps */
                     reward = 0;
-                }
-                else {
+                } else {
                     reward = 0.1;
                 }
                 episodeReward += reward;
-                
-                memory.add({ 
-                    state: stateTensor, 
-                    action, 
-                    reward, 
-                    nextState: nextStateTensor, 
-                    done: nextState.done 
-                }); // Fix the experience structure here
+
+                memory.add({
+                    state: stateTensor,
+                    action,
+                    reward,
+                    nextState: nextStateTensor,
+                    done: nextState.done
+                }, Math.abs(reward)); // use absolute value of reward as priority
 
                 // Decay epsilon (exploration rate)
                 epsilon = epsilonEnd + (epsilonStart - epsilonEnd) * Math.exp(-1 * episode / epsilonDecay);
@@ -162,63 +164,45 @@ async function trainDinoModel(onlineModel, targetModel, proxy, episodes, memory,
     }
 }
 
-async function optimizeModel(onlineModel, targetModel, experiences, gamma, batchSize) {
-    // To speed up, make predictions on full batch:
-    const statesVectors = [];
-    const nextStatesVectors = [];
-    for (const { state, action, reward, nextState, done }
-        of experiences) {
-        statesVectors.push(state.dataSync());
-        nextStatesVectors.push(nextState.dataSync());
-    }
-    const statesTensor = tf.tensor2d(statesVectors);
-    const nextStatesTensor = tf.tensor2d(nextStatesVectors);
+async function optimizeModel(onlineModel, targetModel, memory, batchSize, gamma) {
+    const { samples, sampleIndices } = memory.sample(batchSize);
+    const states = samples.map((sample) => sample.state);
+    const actions = samples.map((sample) => sample.action);
+    const rewards = samples.map((sample) => sample.reward);
+    const nextStates = samples.map((sample) => sample.nextState);
+    const dones = samples.map((sample) => sample.done);
+
+    const statesTensor = tf.tensor(states);
+    const nextStatesTensor = tf.tensor(nextStates);
 
     const onlineModelQValuesTensor = onlineModel.apply(statesTensor);
-    const onlineModelNextQValuesTensor = onlineModel.apply(nextStatesTensor);
-    const targetModelNextQValuesTensor = targetModel.apply(nextStatesTensor);
+    const targetModelQValuesTensor = targetModel.apply(nextStatesTensor);
 
     const onlineModelQValues = onlineModelQValuesTensor.dataSync();
-    const targetModelNextQValues = targetModelNextQValuesTensor.dataSync();
-    
-    const noOfActions = targetModelNextQValuesTensor.shape[1];
+    const targetModelQValues = targetModelQValuesTensor.dataSync();
 
-    // Predict next actions based on online model for full batch:
-    const onlineModelNextActions = onlineModelNextQValuesTensor.argMax(-1).dataSync();
-    
-    let targets = [];
-
-    for (let i=0; i<experiences.length; i++) {
-        const experience = experiences[i];
-
-        let targetQValue;
-        if (experience.done) {
-            targetQValue = experience.reward;
-        } else {
-            // predict next action as argmax from online model
-            let nextOnlineAction = onlineModelNextActions[i];
-            // get target prediction on next action
-            let nextTargetQValue = targetModelNextQValues[noOfActions*i + nextOnlineAction]
-            targetQValue = experience.reward + gamma * nextTargetQValue;
-        }
-
-        const targetArray = onlineModelQValues.slice(i*noOfActions, (i+1)*noOfActions);
-        if (false && experience.done) {
-            console.log("Tensor: " + statesVectors[i]);
-            console.log("Before: " + targetArray);
-            targetArray[experience.action] = targetQValue;
-            console.log("After: " + targetArray );
-        }
-        targetArray[experience.action] = targetQValue;
-        targets.push(targetArray);
+    let priorities = [];
+    for (let i = 0; i < batchSize; i++) {
+        const targetQValue = dones[i] ? rewards[i] : rewards[i] + gamma * targetModelQValues.slice(i * 2, (i + 1) * 2).max();
+        const onlineQValue = onlineModelQValues.slice(i * 2, (i + 1) * 2).gather([actions[i]]);
+        const tdError = Math.abs(targetQValue - onlineQValue);
+        priorities.push(tdError);
     }
 
-    const targetTensor = tf.tensor2d(targets);
+    // Set TD error as new priority for the samples in the memory
+    memory.updatePriorities(sampleIndices, priorities);
 
-    //console.log("Inputs: "+statesTensor.dataSync());
-    //console.log("Targets: "+targetTensor.dataSync());
+    const targetTensor = tf.tensor(targetModelQValues);
+    const targetValuesTensor = tf.tensor(priorities).expandDims(1);
 
-    return onlineModel.fit(statesTensor, targetTensor, { epochs: 1, batchSize, shuffle: true, verbose: false }).then((history) => history.history.loss[0]);
+    const loss = await onlineModel.fit(statesTensor, targetTensor, {
+        epochs: 1,
+        batchSize: batchSize,
+        sampleWeight: targetValuesTensor,
+        shuffle: true,
+    });
+
+    return loss.history.loss[0];
 }
 
 function createModel() {
@@ -226,7 +210,8 @@ function createModel() {
     model.add(tf.layers.dense({ units: 32, activation: 'relu', inputShape: [88] }));
     //model.add(tf.layers.dense({ units: 64, activation: 'relu' }));
     model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
-    model.add(tf.layers.dense({ units: 2, activation: 'linear' }));
+    // model.add(tf.layers.dense({ units: 2, activation: 'linear' }));
+    model.add(new NoisyDense({ units: 2, activation: 'linear', sigma: 0.5, useFactorised: true, useBias: true }));
     return model;
 }
 
@@ -252,16 +237,16 @@ async function selectAction(model, state, epsilon) {
 }
 
 async function test(model) {
-    let vector = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,105,51,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,93];
-    for (let i=19; i>=0; i--) {
+    let vector = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 105, 51, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 93];
+    for (let i = 19; i >= 0; i--) {
         vector[i] = 1;
-        const t = tf.tensor2d(vector, [1,88]);
+        const t = tf.tensor2d(vector, [1, 88]);
         const qValues = model.apply(t);
         vector[86] = 1;
         vector[87] = 20;
-        const t2 = tf.tensor2d(vector, [1,88]);
+        const t2 = tf.tensor2d(vector, [1, 88]);
         const qValues2 = model.apply(t2);
-        console.log("Preds for distance "+i+": "+qValues.dataSync()+" <-> "+qValues2.dataSync());
+        console.log("Preds for distance " + i + ": " + qValues.dataSync() + " <-> " + qValues2.dataSync());
         vector[i] = 0;
         vector[86] = 0;
         vector[87] = 93;
@@ -308,7 +293,7 @@ async function setupModelTraining() {
     const episodes = 10000;
     const memory = new Memory(40000);
     const batchSize = 64;
-    const gamma = 0.9;// Discount factor
+    const gamma = 0.9; // Discount factor
     const epsilonStart = 0.0; // Initial exploration rate
     const epsilonEnd = 0.01; // Final exploration rate
     const epsilonDecay = 200; // Decay rate for exploration
