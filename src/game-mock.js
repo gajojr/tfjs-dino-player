@@ -1,16 +1,6 @@
-const tf = require('@tensorflow/tfjs-node');
 const puppeteer = require('puppeteer');
 
-function preprocessGameData(obstacles, speed) {
-    if (obstacles.length === 0) {
-        return tf.tensor2d([0, 0, 0, speed], [1, 4]);
-    }
-
-    const obstacle = obstacles[0];
-    return tf.tensor2d([obstacle.xPos, obstacle.width, obstacle.yPos, speed], [1, 4]);
-}
-
-const proxy = async(page) => {
+const proxy = page => {
     const jump = async() => {
         await page.keyboard.down('Space');
         await page.keyboard.up('Space');
@@ -20,27 +10,28 @@ const proxy = async(page) => {
 
     const stand = async() => await page.keyboard.up('ArrowDown');
 
-    const speed = async() => {
-        const currentSpeed = await page.evaluate(() => Runner.instance_.currentSpeed);
-        return currentSpeed;
-    };
+    const state = async() => {
+        return await page.evaluate(() => {
+            i = Runner.instance_;
+            return {
+                speed: i.currentSpeed,
+                jumping: i.tRex.jumping,
+                ypos: i.tRex.yPos,
+                done: i.crashed,
+                obstacles: i.horizon.obstacles,
+                time: i.time
+            }
+        });
+    }
 
-    const obstacles = async() => {
-        const obstacleData = await page.evaluate(() => Runner.instance_.horizon.obstacles);
-        return obstacleData;
-    };
-
+    // due to a bug in the game, xPos will increase over time,
+    // so reset to 50 here
     const restart = async() => await page.evaluate(() => {
-        Runner.instance_.restart()
-        Runner.instance_.tRex.xPos = 15;
+        Runner.instance_.tRex.xPos = 50;
+        Runner.instance_.restart(); 
     });
 
-    const crashed = async() => {
-        const isCrashed = await page.evaluate(() => Runner.instance_.crashed);
-        return isCrashed;
-    };
-
-    return { jump, duck, stand, speed, obstacles, restart, crashed };
+    return { jump, duck, stand, restart, state };
 };
 
 async function performAction(action, proxy) {
@@ -58,87 +49,7 @@ async function performAction(action, proxy) {
     }
 }
 
-async function selectAction(model, state, epsilon) {
-    if (Math.random() < epsilon) {
-        // Choose a random action with probability epsilon
-        return Math.floor(Math.random() * 3);
-    } else {
-        // Choose the best action according to the model
-        const inputTensor = tf.tensor2d([Array.from(state.dataSync())]);
-        const qValues = model.predict(inputTensor);
-        const action = (await qValues.argMax(-1).data())[0];
-        return action;
-    }
-}
-
-function computeReward(crashed) {
-    return crashed ? -1 : 0.1;
-}
-
-async function gameLoopPlay(proxy, model) {
-    await proxy.restart();
-    await proxy.jump(); // jump to start the game
-
-    let state = preprocessGameData(await proxy.obstacles(), await proxy.speed());
-
-    while (true) {
-        const inputTensor = tf.tensor2d([Array.from(state.dataSync())]);
-        const qValues = model.predict(inputTensor);
-        const action = (await qValues.argMax(-1).data())[0];
-
-        await performAction(action, proxy);
-
-        await tf.nextFrame();
-
-        state = preprocessGameData(await proxy.obstacles(), await proxy.speed());
-
-        inputTensor.dispose();
-        qValues.dispose();
-
-        if (await proxy.crashed()) {
-            await proxy.restart();
-            state = preprocessGameData(await proxy.obstacles(), await proxy.speed());
-        }
-    }
-}
-
-async function launchBrowser() {
-    const browser = await puppeteer.launch({
-        headless: false,
-        args: ['--mute-audio'] // Add this line to mute audio
-    });
-    const page = await browser.newPage();
-    await page.goto('http://127.0.0.1:8080');
-    return page;
-}
-
-async function playTheGame() {
-    const page = await launchBrowser();
-    await page.waitForFunction('Runner.instance_ !== undefined');
-    const gameProxy = await proxy(page);
-
-    // Load the saved target model
-    let model;
-    try {
-        model = await tf.loadLayersModel('file://./dino-chrome-model/main/model.json');
-        console.log('Target model loaded'.green);
-        model.compile({ // Compile the loaded model
-            optimizer: tf.train.adam(0.001),
-            loss: tf.losses.meanSquaredError
-        });
-    } catch (error) {
-        console.log(error);
-        console.log('No target model found, please train the model first'.red);
-        process.exit();
-    }
-
-    gameLoopPlay(gameProxy, model);
-}
-
 module.exports = {
-    playTheGame,
-    computeReward,
-    selectAction,
     performAction,
     proxy
 }

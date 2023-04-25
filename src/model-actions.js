@@ -4,21 +4,66 @@ const readline = require('readline');
 const colors = require('colors');
 const fs = require('fs').promises;
 const Memory = require('../src/Memory');
-const { computeReward, selectAction, performAction, proxy } = require('../src/game-mock');
+const { performAction, proxy } = require('../src/game-mock');
 
-function preprocessGameData(obstacles, speed) {
-    if (obstacles.length === 0) {
-        return tf.tensor2d([0, 0, 0, speed], [1, 4]);
+function obstacleToVector(obstacle, vector, offset) {
+    // Minimum distance (crash): 19
+    // Maximum distance (appear): 625
+    // Convert distance into int from 0-39.
+    const distance = Math.min(39, Math.max(0, ~~((obstacle.xPos - 19) / 16)));
+    vector[offset + distance] = 1;
+    vector[offset+40] = obstacle.yPos;
+    vector[offset+41] = obstacle.width;
+    vector[offset+42] = obstacle.size;
+}
+
+function stateToTensor(state) {
+    // shape of tensor: (88,)
+    // [0-39]: distance to obstacle 0, one-hot encoded
+    // [40]: y-position of obstacle 0
+    // [41]: width of obstacle 0
+    // [42]: height of obstacle 0
+    // [43-85]: same for obstacle 1
+    // [86]: jumping? 0/1
+    // [87]: y-position of t-rex
+    let vector = [
+        0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0
+    ];
+
+    const obstacles = state.obstacles;
+    if (obstacles.length > 0) {
+        obstacleToVector(obstacles[0], vector, 0);
+
+        if (obstacles.length > 1) {
+            obstacleToVector(obstacles[1], vector, 43);
+        }
     }
 
-    const obstacle = obstacles[0];
-    return tf.tensor2d([obstacle.xPos, obstacle.width, obstacle.yPos, speed], [1, 4]);
+    // Jump yes/no:
+    if (state.jumping) {
+        vector[86] = 1;
+    }
+    vector[87] = state.ypos;
+    //console.log("State: "+vector);
+
+    return tf.tensor2d(vector, [1, 88]);
+}
+
+async function delay(time) {
+    return new Promise(resolve => setTimeout(resolve, time));
 }
 
 // update the target model's weights with the online model's weights
 async function updateTargetModel(onlineModel, targetModel) {
     const onlineWeights = onlineModel.getWeights();
     await targetModel.setWeights(onlineWeights);
+    await onlineModel.save('file://./dino-chrome-model/main');
+    await targetModel.save('file://./dino-chrome-model/target');
+    //test(onlineModel);
 }
 
 async function trainDinoModel(onlineModel, targetModel, proxy, episodes, memory, batchSize, gamma, epsilonStart, epsilonEnd, epsilonDecay, targetUpdateFrequency) {
@@ -33,32 +78,74 @@ async function trainDinoModel(onlineModel, targetModel, proxy, episodes, memory,
 
     for (let episode = 0; episode < episodes; episode++) {
         await proxy.restart();
-        let state = preprocessGameData(await proxy.obstacles(), await proxy.speed());
-        let done = false;
+        let state = await proxy.state();
 
-        while (!done) {
-            const action = await selectAction(onlineModel, state, epsilon);
+        while (!state.done) {
+            const stateTensor = stateToTensor(state);
+            const action = await selectAction(onlineModel, stateTensor, epsilon);
             performAction(action, proxy);
 
-            await tf.nextFrame();
-
-            const nextState = preprocessGameData(await proxy.obstacles(), await proxy.speed());
-            const crashed = await proxy.crashed();
-            const reward = computeReward(crashed);
-            episodeReward += reward;
-            done = crashed;
-
-            memory.add({ state, action, reward, nextState, done }); // Fix the experience structure here
-            state = nextState;
-
+            // We need some time to pass, otherwise the next state will
+            // be too close to the current state and model won't see the
+            // result of it's action.
+            // Instead of sleeping, we can do the optimization here. This
+            // will take some time.
             if (memory.buffer.length >= batchSize) {
-                const experiences = memory.sample(batchSize);
-                const loss = await optimizeModel(onlineModel, targetModel, experiences, gamma, batchSize);
-                console.log('Loss:', loss);
+                try {
+                    const experiences = memory.sample(batchSize);
+                    const loss = await optimizeModel(onlineModel, targetModel, experiences, gamma, batchSize);
+                    //console.log('Loss:', loss);
+                } catch (e) {
+                    console.log(e);
+                }
             }
 
-            // Decay epsilon (exploration rate)
-            epsilon = epsilonEnd + (epsilonStart - epsilonEnd) * Math.exp(-1 * episode / epsilonDecay);
+            // target is to spend 40 ms between two game states
+            let nextState = await proxy.state();
+            while (!nextState.done && nextState.time - state.time < 40) {
+                await delay(5);
+                nextState = await proxy.state();
+            }
+
+            const timeDelta = nextState.time - state.time;
+
+            // Evaluate this step if and only if in time frame.
+            // This will miss on some crashes but thats better
+            // than having a crash assigned to the wrong action.
+            if (timeDelta < 40 || timeDelta > 60) {
+                if (!nextState.done) {
+                    console.warn("Time delta < 40 ms or > 60ms: " + timeDelta);
+                }
+            }
+            else {
+                const nextStateTensor = stateToTensor(nextState);
+
+                let reward;
+                if (nextState.done) {
+                    reward = -1;
+                }
+                else if (action === 1) {
+                    /* experiment: make jumps expensive to avoid random jumps */
+                    reward = 0;
+                }
+                else {
+                    reward = 0.1;
+                }
+                episodeReward += reward;
+                
+                memory.add({ 
+                    state: stateTensor, 
+                    action, 
+                    reward, 
+                    nextState: nextStateTensor, 
+                    done: nextState.done 
+                }); // Fix the experience structure here
+
+                // Decay epsilon (exploration rate)
+                epsilon = epsilonEnd + (epsilonStart - epsilonEnd) * Math.exp(-1 * episode / epsilonDecay);
+            }
+
+            state = nextState;
         }
 
         // Update the target model's weights periodically
@@ -76,70 +163,109 @@ async function trainDinoModel(onlineModel, targetModel, proxy, episodes, memory,
 }
 
 async function optimizeModel(onlineModel, targetModel, experiences, gamma, batchSize) {
-    const inputs = [];
-    const targets = [];
-
+    // To speed up, make predictions on full batch:
+    const statesVectors = [];
+    const nextStatesVectors = [];
     for (const { state, action, reward, nextState, done }
         of experiences) {
-        const inputTensor = tf.tensor2d([Array.from(state.dataSync())]);
-        const onlineModelQValues = onlineModel.predict(inputTensor);
+        statesVectors.push(state.dataSync());
+        nextStatesVectors.push(nextState.dataSync());
+    }
+    const statesTensor = tf.tensor2d(statesVectors);
+    const nextStatesTensor = tf.tensor2d(nextStatesVectors);
 
-        const nextInputTensor = tf.tensor2d([Array.from(nextState.dataSync())]);
-        const onlineModelNextQValues = onlineModel.predict(nextInputTensor);
+    const onlineModelQValuesTensor = onlineModel.apply(statesTensor);
+    const onlineModelNextQValuesTensor = onlineModel.apply(nextStatesTensor);
+    const targetModelNextQValuesTensor = targetModel.apply(nextStatesTensor);
 
-        const targetInputTensor = tf.tensor2d([Array.from(nextState.dataSync())]);
-        const targetModelNextQValues = targetModel.predict(targetInputTensor);
+    const onlineModelQValues = onlineModelQValuesTensor.dataSync();
+    const targetModelNextQValues = targetModelNextQValuesTensor.dataSync();
+    
+    const noOfActions = targetModelNextQValuesTensor.shape[1];
 
-        const reshapedOnlineModelNextQValues = onlineModelNextQValues.reshape([1, -1]);
+    // Predict next actions based on online model for full batch:
+    const onlineModelNextActions = onlineModelNextQValuesTensor.argMax(-1).dataSync();
+    
+    let targets = [];
 
-        // Use tf.tidy() and tf.keep() to manage memory efficiently
-        let nextQValue;
-        tf.tidy(() => {
-            const nextQValueIndex = onlineModelNextQValues.argMax(1);
-            const nextQValueTensor = tf.keep(targetModelNextQValues.gather(nextQValueIndex, 1));
-            nextQValue = nextQValueTensor.dataSync()[0];
-        });
+    for (let i=0; i<experiences.length; i++) {
+        const experience = experiences[i];
 
         let targetQValue;
-        if (done) {
-            targetQValue = reward;
+        if (experience.done) {
+            targetQValue = experience.reward;
         } else {
-            targetQValue = reward + gamma * nextQValue;
+            // predict next action as argmax from online model
+            let nextOnlineAction = onlineModelNextActions[i];
+            // get target prediction on next action
+            let nextTargetQValue = targetModelNextQValues[noOfActions*i + nextOnlineAction]
+            targetQValue = experience.reward + gamma * nextTargetQValue;
         }
 
-        const targetArray = Array.from(onlineModelQValues.dataSync());
-        targetArray[action] = targetQValue;
-        inputs.push(Array.from(state.dataSync()));
+        const targetArray = onlineModelQValues.slice(i*noOfActions, (i+1)*noOfActions);
+        if (false && experience.done) {
+            console.log("Tensor: " + statesVectors[i]);
+            console.log("Before: " + targetArray);
+            targetArray[experience.action] = targetQValue;
+            console.log("After: " + targetArray );
+        }
+        targetArray[experience.action] = targetQValue;
         targets.push(targetArray);
-
-        inputTensor.dispose();
-        onlineModelQValues.dispose();
-        nextInputTensor.dispose();
-        onlineModelNextQValues.dispose();
-        targetInputTensor.dispose();
-        targetModelNextQValues.dispose();
-        reshapedOnlineModelNextQValues.dispose();
     }
 
-    const inputTensor = tf.tensor2d(inputs);
     const targetTensor = tf.tensor2d(targets);
 
-    return onlineModel.fit(inputTensor, targetTensor, { epochs: 1, batchSize, shuffle: true }).then((history) => history.history.loss[0]);
+    //console.log("Inputs: "+statesTensor.dataSync());
+    //console.log("Targets: "+targetTensor.dataSync());
+
+    return onlineModel.fit(statesTensor, targetTensor, { epochs: 1, batchSize, shuffle: true, verbose: false }).then((history) => history.history.loss[0]);
 }
 
-async function createModel() {
+function createModel() {
     const model = tf.sequential();
-    model.add(tf.layers.dense({ units: 128, activation: 'relu', inputShape: [4] }));
-    model.add(tf.layers.dense({ units: 64, activation: 'relu' }));
+    model.add(tf.layers.dense({ units: 32, activation: 'relu', inputShape: [88] }));
+    //model.add(tf.layers.dense({ units: 64, activation: 'relu' }));
     model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
-    model.add(tf.layers.dense({ units: 3, activation: 'linear' }));
+    model.add(tf.layers.dense({ units: 2, activation: 'linear' }));
+    return model;
+}
 
+function compileModel(model) {
     model.compile({
-        optimizer: tf.train.adam(0.001),
+        optimizer: tf.train.adam(0.0001),
         loss: tf.losses.meanSquaredError
     });
+}
 
-    return model;
+async function selectAction(model, state, epsilon) {
+    if (Math.random() < epsilon) {
+        // Choose a random action with probability epsilon
+        return Math.floor(Math.random() * 2);
+    } else {
+        // Choose the best action according to the model
+        //console.log("State: "+state.dataSync());
+        const qValues = model.apply(state);
+        //console.log("Preds: "+qValues.dataSync());
+        const action = (await qValues.argMax(-1).data())[0];
+        return action;
+    }
+}
+
+async function test(model) {
+    let vector = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,105,51,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,93];
+    for (let i=19; i>=0; i--) {
+        vector[i] = 1;
+        const t = tf.tensor2d(vector, [1,88]);
+        const qValues = model.apply(t);
+        vector[86] = 1;
+        vector[87] = 20;
+        const t2 = tf.tensor2d(vector, [1,88]);
+        const qValues2 = model.apply(t2);
+        console.log("Preds for distance "+i+": "+qValues.dataSync()+" <-> "+qValues2.dataSync());
+        vector[i] = 0;
+        vector[86] = 0;
+        vector[87] = 93;
+    }
 }
 
 async function launchBrowser() {
@@ -162,37 +288,31 @@ async function setupModelTraining() {
     try {
         model = await tf.loadLayersModel('file://./dino-chrome-model/main/model.json');
         console.log('Loaded saved model'.green);
-        model.compile({ // Compile the loaded model
-            optimizer: tf.train.adam(0.001),
-            loss: tf.losses.meanSquaredError
-        });
     } catch (error) {
         console.log('No saved model found, creating a new one'.yellow);
-        model = await createModel();
+        model = createModel();
     }
+    compileModel(model);
 
     // Load the target model from the same file location as the main model
     let targetModel;
     try {
         targetModel = await tf.loadLayersModel('file://./dino-chrome-model/main/model.json');
         console.log('Loaded target model'.green);
-        targetModel.compile({
-            optimizer: tf.train.adam(0.001),
-            loss: tf.losses.meanSquaredError
-        });
     } catch (error) {
         console.log('No target model found, cloning the main model'.yellow);
-        targetModel = await createModel();
+        targetModel = createModel();
     }
+    compileModel(targetModel);
 
-    const episodes = 1000;
-    const memory = new Memory(100000);
-    const batchSize = 32;
-    const gamma = 0.9; // Discount factor
-    const epsilonStart = 1.0; // Initial exploration rate
+    const episodes = 10000;
+    const memory = new Memory(40000);
+    const batchSize = 64;
+    const gamma = 0.9;// Discount factor
+    const epsilonStart = 0.0; // Initial exploration rate
     const epsilonEnd = 0.01; // Final exploration rate
     const epsilonDecay = 200; // Decay rate for exploration
-    const targetUpdateFrequency = 50; // How often to update the target model
+    const targetUpdateFrequency = 10; // How often to update the target model
 
     const saveAndExit = async() => {
         console.log('Saving models before exit...'.green);
@@ -217,7 +337,7 @@ async function setupModelTraining() {
     // Handle uncaught exceptions
     process.on('uncaughtException', async(error) => {
         console.error(`Uncaught exception: ${error.message.red}`);
-        await saveAndExit();
+        //await saveAndExit();
     });
 
     // Train the model here (additionally or for the first time)
