@@ -79,6 +79,7 @@ async function trainDinoModel(onlineModel, targetModel, proxy, episodes, memory,
 
     for (let episode = 0; episode < episodes; episode++) {
         await proxy.restart();
+        await proxy.jump();
         let state = await proxy.state();
 
         while (!state.done) {
@@ -206,12 +207,24 @@ async function optimizeModel(onlineModel, targetModel, memory, batchSize, gamma)
 }
 
 function createModel() {
-    const model = tf.sequential();
-    model.add(tf.layers.dense({ units: 32, activation: 'relu', inputShape: [88] }));
-    //model.add(tf.layers.dense({ units: 64, activation: 'relu' }));
-    model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
-    // model.add(tf.layers.dense({ units: 2, activation: 'linear' }));
-    model.add(new NoisyDense({ units: 2, activation: 'linear', sigma: 0.5, useFactorised: true, useBias: true }));
+    const input = tf.input({ shape: [88] });
+    const dense1 = tf.layers.dense({ units: 64, activation: 'relu' }).apply(input);
+    const dense2 = tf.layers.dense({ units: 64, activation: 'relu' }).apply(dense1);
+
+    const stateValue = new NoisyDense({ units: 1, activation: 'linear', sigma: 0.5, useFactorised: true, useBias: true }).apply(dense2);
+    const advantage = new NoisyDense({ units: 3, activation: 'linear', sigma: 0.5, useFactorised: true, useBias: true }).apply(dense2);
+
+    const lambdaLayer = tf.layers.lambda(inputs => {
+        const adv = inputs[0];
+        const val = inputs[1];
+        return adv.sub(tf.mean(adv, 1, true)).add(val);
+    });
+
+    const advantageNorm = lambdaLayer.apply([advantage, stateValue]);
+    const model = tf.model({ inputs: input, outputs: [stateValue, advantageNorm] });
+
+    compileModel(model);
+
     return model;
 }
 
@@ -225,7 +238,7 @@ function compileModel(model) {
 async function selectAction(model, state, epsilon) {
     if (Math.random() < epsilon) {
         // Choose a random action with probability epsilon
-        return Math.floor(Math.random() * 2);
+        return Math.floor(Math.random() * 3);
     } else {
         // Choose the best action according to the model
         //console.log("State: "+state.dataSync());
