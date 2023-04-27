@@ -6,6 +6,7 @@ const fs = require('fs').promises;
 const Memory = require('../src/Memory');
 const { performAction, proxy } = require('../src/game-mock');
 const NoisyDense = require('./NoisyDense');
+const AdvantageNormalization = require('./AdvantageNormalization');
 
 function obstacleToVector(obstacle, vector, offset) {
     // Minimum distance (crash): 19
@@ -211,17 +212,12 @@ function createModel() {
     const dense1 = tf.layers.dense({ units: 64, activation: 'relu' }).apply(input);
     const dense2 = tf.layers.dense({ units: 64, activation: 'relu' }).apply(dense1);
 
-    const stateValue = new NoisyDense({ units: 1, activation: 'linear', sigma: 0.5, useFactorised: true, useBias: true }).apply(dense2);
-    const advantage = new NoisyDense({ units: 3, activation: 'linear', sigma: 0.5, useFactorised: true, useBias: true }).apply(dense2);
+    const stateValue = new NoisyDense(1, 'state_value', 0.5, 'linear', true, true).apply(dense2);
+    const advantage = new NoisyDense(3, 'advantage', 0.5, 'linear', true, true).apply(dense2);
 
-    const lambdaLayer = tf.layers.lambda(inputs => {
-        const adv = inputs[0];
-        const val = inputs[1];
-        return adv.sub(tf.mean(adv, 1, true)).add(val);
-    });
-
-    const advantageNorm = lambdaLayer.apply([advantage, stateValue]);
-    const model = tf.model({ inputs: input, outputs: [stateValue, advantageNorm] });
+    const advantageNorm = new AdvantageNormalization().apply([advantage, stateValue]);
+    const model = tf.model({ inputs: input, outputs: { stateValue, advantageNorm } });
+    // const model = tf.model({ inputs: input, outputs: [stateValue, advantageNorm] });
 
     compileModel(model);
 

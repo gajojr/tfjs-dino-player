@@ -1,8 +1,8 @@
 const tf = require('@tensorflow/tfjs-node');
 
 class NoisyDense extends tf.layers.Layer {
-    constructor(units, sigma = 0.5, useFactorised = true, activation = null, useBias = true, kernelRegularizer = null, biasRegularizer = null, activityRegularizer = null, kernelConstraint = null, biasConstraint = null) {
-        super({});
+    constructor(units, name, sigma = 0.5, activation = null, useFactorised = true, useBias = true, kernelRegularizer = null, biasRegularizer = null, activityRegularizer = null, kernelConstraint = null, biasConstraint = null) {
+        super({ name });
         this.units = units;
         this.sigma = sigma;
         this.useFactorised = useFactorised;
