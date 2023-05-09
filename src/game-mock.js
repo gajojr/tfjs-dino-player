@@ -1,17 +1,25 @@
 const puppeteer = require('puppeteer');
 
-const proxy = page => {
-    const jump = async() => {
-        await page.keyboard.down('Space');
-        await page.keyboard.up('Space');
-    };
+class ChromeGameProxy {
+    constructor(page) {
+        this.page = page;
+    }
 
-    const duck = async() => await page.keyboard.down('ArrowDown');
+    async jump() {
+        await this.page.keyboard.down('Space');
+        await this.page.keyboard.up('Space');
+    }
 
-    const stand = async() => await page.keyboard.up('ArrowDown');
+    async duck() {
+        await this.page.keyboard.down('ArrowDown');
+    }
 
-    const state = async() => {
-        return await page.evaluate(() => {
+    async stand() {
+        await this.page.keyboard.up('ArrowDown');
+    }
+
+    async state() {
+        return await this.page.evaluate(() => {
             i = Runner.instance_;
             return {
                 speed: i.currentSpeed,
@@ -26,30 +34,29 @@ const proxy = page => {
 
     // due to a bug in the game, xPos will increase over time,
     // so reset to 50 here
-    const restart = async() => await page.evaluate(() => {
+    async restart() {
+      this.page.evaluate(() => {
         Runner.instance_.tRex.xPos = 50;
         Runner.instance_.restart(); 
-    });
+      });
+    } 
 
-    return { jump, duck, stand, restart, state };
-};
-
-async function performAction(action, proxy) {
-    switch (action) {
-        case 1:
-            await proxy.jump();
-            break;
-        case 2:
-            await proxy.duck();
-            break;
-        case 0:
-        default:
-            await proxy.stand();
-            break;
+    async performAction(action, proxy) {
+        switch (action) {
+            case 1:
+                await this.jump();
+                break;
+            case 2:
+                await this.duck();
+                break;
+            case 0:
+            default:
+                await this.stand();
+                break;
+        }
     }
 }
 
 module.exports = {
-    performAction,
-    proxy
+    ChromeGameProxy
 }

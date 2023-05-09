@@ -10,15 +10,15 @@ class Memory {
         this.priorities = new Array(bufferSize).fill(0);
     }
 
-    add(experience, priority) {
+    add(experience) {
         if (this.buffer[this.pointer] === null) {
             this.count++;
         }
         const oldPriority = this.priorities[this.pointer];
-        const newPriority = Math.pow(priority + this.epsilon, this.alpha);
-        this.priorities[this.pointer] = newPriority;
+        const newPriority = 10; // initial high priority
         this.sumPriorities = this.sumPriorities + newPriority - oldPriority;
-        this.buffer[this.pointer] = { experience, priority };
+        this.priorities[this.pointer] = newPriority;
+        this.buffer[this.pointer] = experience;
         this.pointer = (this.pointer + 1) % this.bufferSize;
     }
 
@@ -37,8 +37,7 @@ class Memory {
         for (let i = 0; i < batchSize; i++) {
             const sampleProbability = Math.random();
             const sampleIndex = this.binarySearch(cumulativeProbabilities, sampleProbability);
-            const { experience } = this.buffer[sampleIndex];
-            // const samplePriority = priorities[sampleIndex];
+            const experience = this.buffer[sampleIndex];
             samples.push(experience);
             sampleIndices.push(sampleIndex);
         }
