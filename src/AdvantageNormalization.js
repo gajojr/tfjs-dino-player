@@ -5,12 +5,21 @@ class AdvantageNormalization extends tf.layers.Layer {
 		super({});
 	}
 
+	computeOutputShape(inputShape) {
+		// AdvantageNormalization layer gets two input tensors:
+		// one of shape [null, 1, y] and one of shape [null, x, y]
+		// and reduces this to one output tensor of shape [null, x, y].
+		return inputShape[1];
+	}
+
 	call(inputs) {
-		const adv = inputs[0];
-		const val = inputs[1];
-		const mean = tf.mean(adv, 1, true);
-		const centered = adv.sub(mean);
-		return centered.add(val);
+		return tf.tidy(() => {
+			const val = inputs[0];
+			const adv = inputs[1];
+			const mean = tf.mean(adv, 1, true);
+			const centered = adv.sub(mean);
+			return centered.add(val);
+		});
 	}
 
 	getClassName() {
