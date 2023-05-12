@@ -27,7 +27,7 @@ function sum_kl(yTrue, yPred) {
 }
 
 function clip(v, min, max) {
-	return Math.min(Math.max(v, min));
+	return Math.min(Math.max(v, min), max);
 }
 
 class DinoAgent {
@@ -35,7 +35,7 @@ class DinoAgent {
 		this.proxy = proxy;
 		this.memory = new Memory(100000);
 		// Batch size.
-		this.batchSize = 64;
+		this.batchSize = 32;
 		// Discount factor (0 < gamma <= 1).
 		this.gamma = 0.9;
 		// How often to update the target model, must be multiple of batch size.
@@ -70,7 +70,7 @@ class DinoAgent {
 	}
 
 	stateToVector(state) {
-		// shape of tensor: (88,)
+		// shape of tensor: (89,)
 		// [0-39]: distance to obstacle 0, one-hot encoded
 		// [40]: y-position of obstacle 0
 		// [41]: width of obstacle 0
@@ -78,11 +78,12 @@ class DinoAgent {
 		// [43-85]: same for obstacle 1
 		// [86]: jumping? 0/1
 		// [87]: y-position of t-rex
+		// [88]: current game speed
 		let vector = [
 			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 		];
 
 		const obstacles = state.obstacles;
@@ -99,7 +100,7 @@ class DinoAgent {
 			vector[86] = 1;
 		}
 		vector[87] = state.ypos;
-		//console.log("State: "+vector);
+		vector[88] = state.speed;
 
 		return vector;
 	}
@@ -158,9 +159,11 @@ class DinoAgent {
 					await this.optimizeModel();
 				}
 
-				// target is to spend 40 ms between two game states
+				// Chrome game seems to use 60 FPS, so time in game passes
+				// in steps of about 16-17 ms. We try to use 30 FPS, so
+				// we wait here until two time steps (about 30-40 ms) passed.
 				let nextState = await this.proxy.state();
-				while (!nextState.done && nextState.time - state.time < 40) {
+				while (!nextState.done && nextState.time - state.time < 30) {
 					await this.delay(5);
 					nextState = await this.proxy.state();
 				}
@@ -168,19 +171,19 @@ class DinoAgent {
 				const timeDelta = nextState.time - state.time;
 
 				// Evaluate this step if and only if in time frame.
-				if (timeDelta > 60) {
+				if (timeDelta > 40) {
 					// too late, ignore this result because it is
 					// not related to any model action
-					console.warn('Time delta > 60ms: ' + timeDelta);
+					console.warn('Time delta > 40ms: ' + timeDelta);
 				}
-				else if (timeDelta < 40) {
+				else if (timeDelta < 30) {
 					if (!nextState.done) {
 						// this result should not happen because that means
 						// that delay method failed for an unknown reason
-						console.error('Time delta < 40ms and not done, failed delay?: ' + timeDelta);
+						console.error('Time delta < 30ms and not done, failed delay?: ' + timeDelta);
 					}
 					else {
-						// terminal state was reached in less than 40 ms.
+						// terminal state was reached in less than 30 ms.
 						// To not loose this result, we assume that this is
 						// a (late) result of the former action, so last
 						// action is updated. This works only with multi
@@ -419,7 +422,7 @@ class DinoAgent {
 		 * Both branches are recombined into a single distribution
 		 * (Q) with shape (3,D_ATOMS).
 		 */
-		const i = tf.input({ shape: [88], name: 'state_input' });
+		const i = tf.input({ shape: [89], name: 'state_input' });
 		const cd1 = tf.layers.dense({ units: 64, activation: 'relu', name: 'common_dense1' }).apply(i);
 		const cd2 = tf.layers.dense({ units: 64, activation: 'relu', name: 'common_dense2' }).apply(cd1);
     // now break up into two branches:
@@ -458,7 +461,7 @@ class DinoAgent {
 
 		return tf.tidy(() => {
 			// Choose the best action according to the model.
-			const stateTensor = tf.tensor2d(state, [1, 88]);
+			const stateTensor = tf.tensor2d(state, [1, 89]);
 			const pDist = this.onlineModel.apply(stateTensor);
 			// pDist is per-action probability distribution over 
 			// possible rewards, shape (null, 3, 51)
