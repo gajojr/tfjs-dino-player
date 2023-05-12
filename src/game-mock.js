@@ -3,19 +3,41 @@ const puppeteer = require('puppeteer');
 class ChromeGameProxy {
     constructor(page) {
         this.page = page;
+        this.inJump = false;
+        this.inDuck = false;
     }
 
     async jump() {
-        await this.page.keyboard.down('Space');
-        await this.page.keyboard.up('Space');
+        if (this.inDuck) {
+            await this.page.keyboard.up('ArrowDown');
+            this.inDuck = false;
+        }
+        if (!this.inJump) {
+            await this.page.keyboard.down('Space');
+            this.inJump = true;
+        }
     }
 
     async duck() {
-        await this.page.keyboard.down('ArrowDown');
+        if (this.inJump) {
+            await this.page.keyboard.up('Space');
+            this.inJump = false;
+        }
+        if (!this.inDuck) {
+            await this.page.keyboard.down('ArrowDown');
+            this.inDuck = true;
+        }
     }
 
     async stand() {
-        await this.page.keyboard.up('ArrowDown');
+        if (this.inJump) {
+            await this.page.keyboard.up('Space');
+            this.inJump = false;
+        }
+        if (this.inDuck) {
+            await this.page.keyboard.up('ArrowDown');
+            this.inDuck = false;
+        }
     }
 
     async state() {
