@@ -445,7 +445,7 @@ class DinoAgent {
 		});
 
 		model.compile({
-			optimizer: tf.train.adam(0.001),
+			optimizer: tf.train.adam(0.00025),
 			loss: sum_kl,
 		});
 	
