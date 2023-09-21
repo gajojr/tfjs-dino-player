@@ -70,7 +70,7 @@ class DinoAgent {
     }
 
     stateToVector(state) {
-        // shape of tensor: (89,)
+        // shape of tensor: (106,)
         // [0-39]: distance to obstacle 0, one-hot encoded
         // [40]: y-position of obstacle 0
         // [41]: width of obstacle 0
@@ -78,12 +78,13 @@ class DinoAgent {
         // [43-85]: same for obstacle 1
         // [86]: jumping? 0/1
         // [87]: y-position of t-rex
-        // [88]: current game speed
+        // [88-105]: current game speed, one-hot encoded
         let vector = [
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0
         ];
 
         const obstacles = state.obstacles;
@@ -100,7 +101,8 @@ class DinoAgent {
             vector[86] = 1;
         }
         vector[87] = state.ypos;
-        vector[88] = state.speed;
+        let speed = Math.min(17, Math.max(0, Math.round(state.speed-6)));
+        vector[88+speed] = 1;
 
         return vector;
     }
@@ -113,7 +115,7 @@ class DinoAgent {
     async updateTargetModel() {
         const onlineWeights = this.onlineModel.getWeights();
         await this.targetModel.setWeights(onlineWeights);
-        await this.onlineModel.save('file://./dino-chrome-model/main');
+        //await this.onlineModel.save('file://./dino-chrome-model/main');
         await this.targetModel.save('file://./dino-chrome-model/target');
     }
 
@@ -142,7 +144,7 @@ class DinoAgent {
 
             while (!state.done) {
                 const stateVector = this.stateToVector(state);
-                const action = this.selectAction(stateVector);
+                                const action = this.selectAction(stateVector);
 
                 this.proxy.performAction(action);
 
@@ -411,7 +413,7 @@ class DinoAgent {
          * Both branches are recombined into a single distribution
          * (Q) with shape (3,D_ATOMS).
          */
-        const i = tf.input({ shape: [89], name: 'state_input' });
+        const i = tf.input({ shape: [106], name: 'state_input' });
         const cd1 = tf.layers.dense({ units: 64, activation: 'relu', name: 'common_dense1' }).apply(i);
         const cd2 = tf.layers.dense({ units: 64, activation: 'relu', name: 'common_dense2' }).apply(cd1);
         // now break up into two branches:
@@ -434,7 +436,7 @@ class DinoAgent {
         });
 
         model.compile({
-            optimizer: tf.train.adam(0.00025),
+            optimizer: tf.train.adam(0.000125),
             loss: sum_kl,
         });
 
@@ -450,7 +452,7 @@ class DinoAgent {
 
         return tf.tidy(() => {
             // Choose the best action according to the model.
-            const stateTensor = tf.tensor2d(state, [1, 89]);
+            const stateTensor = tf.tensor2d(state, [1, 106]);
             const pDist = this.onlineModel.apply(stateTensor);
             // pDist is per-action probability distribution over 
             // possible rewards, shape (null, 3, 51)
@@ -481,7 +483,7 @@ async function createChromeGameProxy() {
 
 function compileModel(model) {
     model.compile({
-        optimizer: tf.train.adam(0.00025),
+        optimizer: tf.train.adam(0.000125),
         loss: sum_kl,
     });
 }
@@ -493,67 +495,28 @@ async function setupModelTraining() {
 
     // Load the saved model or create a new one if it doesn't exist
     try {
-        dinoAgent.onlineModel = await tf.loadLayersModel(
-            'file://./dino-chrome-model/main/model.json'
+        dinoAgent.targetModel = await tf.loadLayersModel(
+            'file://./dino-chrome-model/target/model.json'
         );
-        compileModel(dinoAgent.onlineModel);
+        compileModel(dinoAgent.targetModel);
         console.log('Loaded saved model'.green);
+        // important: to see effect of loaded model,
+        // set epsilon to 0 to be greedy, otherwise
+        // model will fail fast due to epsilon == 1.
+        dinoAgent.epsilon = 0;
     } catch (error) {
         console.log('No saved model found, creating a new one'.yellow);
-        dinoAgent.onlineModel = dinoAgent.createModel();
+        dinoAgent.targetModel = dinoAgent.createModel();
     }
 
-    // Load the target model from the same file location as the main model
-    // try {
-    // 	dinoAgent.targetModel = await tf.loadLayersModel(
-    // 		'file://./dino-chrome-model/main/model.json'
-    // 	);
-    // 	console.log('Loaded target model'.green);
-    // } catch (error) {
-    // 	console.log('No target model found, cloning the main model'.yellow);
-    dinoAgent.targetModel = dinoAgent.createModel();
-    // }
-    dinoAgent.targetModel.setWeights(dinoAgent.onlineModel.getWeights());
-    compileModel(dinoAgent.targetModel);
+    dinoAgent.onlineModel = dinoAgent.createModel();
+    dinoAgent.onlineModel.setWeights(dinoAgent.targetModel.getWeights());
+    compileModel(dinoAgent.onlineModel);
 
     const episodes = 100000;
 
-    const saveAndExit = async() => {
-        console.log('Saving models before exit...'.green);
-        await dinoAgent.onlineModel.save('file://./dino-chrome-model/main');
-        console.log('Main model saved successfully.'.green);
-        await dinoAgent.targetModel.save('file://./dino-chrome-model/target');
-        console.log('Target model saved successfully.'.green);
-        process.exit();
-    };
-
-    // Handle SIGINT (Ctrl + C) using readline
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-    });
-
-    rl.on('SIGINT', async() => {
-        rl.close(); // Close the readline interface
-        await saveAndExit(); // Save the model and exit
-    });
-
-    // Handle uncaught exceptions
-    process.on('uncaughtException', async(error) => {
-        console.error(`Uncaught exception: ${error.message.red}`);
-        await saveAndExit();
-    });
-
     // Train the model here (additionally or for the first time)
-    // try {
     await dinoAgent.trainModel(episodes);
-    // } catch (error) {
-    // 	console.error(`Error during training: ${error}`);
-    // }
-
-    // Save the models to disk storage in separate folders
-    await dinoAgent.onlineModel.save('file://./dino-chrome-model/main');
-    await dinoAgent.targetModel.save('file://./dino-chrome-model/target');
 }
 
 module.exports = {
