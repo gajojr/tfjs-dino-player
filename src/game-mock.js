@@ -1,5 +1,3 @@
-const puppeteer = require('puppeteer');
-
 class ChromeGameProxy {
     constructor(page) {
         this.page = page;
@@ -57,11 +55,11 @@ class ChromeGameProxy {
     // due to a bug in the game, xPos will increase over time,
     // so reset to 50 here
     async restart() {
-      this.page.evaluate(() => {
-        Runner.instance_.tRex.xPos = 50;
-        Runner.instance_.restart(); 
-      });
-    } 
+        this.page.evaluate(() => {
+            Runner.instance_.tRex.xPos = 50;
+            Runner.instance_.restart();
+        });
+    }
 
     async performAction(action, proxy) {
         switch (action) {

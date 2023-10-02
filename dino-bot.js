@@ -1,6 +1,5 @@
 const colors = require('colors');
-const { setupModelTraining } = require('./src/model-actions');
-const { playTheGame } = require('./src/game-mock');
+const { setupModelTraining, setupModelPlaying } = require('./src/model-actions');
 
 // pass arg --train or --play
 (async() => {
@@ -9,7 +8,7 @@ const { playTheGame } = require('./src/game-mock');
     if (args.includes('--train')) {
         await setupModelTraining();
     } else if (args.includes('--play')) {
-        await playTheGame();
+        await setupModelPlaying();
     } else {
         console.log(`Please provide an argument: ${'--train'.yellow} or ${'--play'.yellow}`);
         process.exit();

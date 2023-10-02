@@ -101,8 +101,8 @@ class DinoAgent {
             vector[86] = 1;
         }
         vector[87] = state.ypos;
-        let speed = Math.min(17, Math.max(0, Math.round(state.speed-6)));
-        vector[88+speed] = 1;
+        let speed = Math.min(17, Math.max(0, Math.round(state.speed - 6)));
+        vector[88 + speed] = 1;
 
         return vector;
     }
@@ -144,7 +144,7 @@ class DinoAgent {
 
             while (!state.done) {
                 const stateVector = this.stateToVector(state);
-                                const action = this.selectAction(stateVector);
+                const action = this.selectAction(stateVector);
 
                 this.proxy.performAction(action);
 
@@ -519,6 +519,60 @@ async function setupModelTraining() {
     await dinoAgent.trainModel(episodes);
 }
 
+async function setupModelPlaying() {
+    const gameProxy = await createChromeGameProxy();
+
+    const dinoAgent = new DinoAgent(gameProxy);
+
+    // Load the saved model
+    try {
+        dinoAgent.targetModel = await tf.loadLayersModel(
+            'file://./dino-chrome-model/target/model.json'
+        );
+        compileModel(dinoAgent.targetModel);
+        console.log('Loaded saved model'.green);
+        dinoAgent.epsilon = 0; // setting epsilon to 0 to make the model choose the best action always
+    } catch (error) {
+        console.error('No saved model found. You need to train the model first.'.red);
+        // You might want to exit the process if there's no model to play with
+        process.exit(1);
+    }
+
+    dinoAgent.onlineModel = dinoAgent.createModel();
+    dinoAgent.onlineModel.setWeights(dinoAgent.targetModel.getWeights());
+    compileModel(dinoAgent.onlineModel);
+
+    // Now enter the playing loop
+    await gameProxy.restart(); // Restart the game to ensure a fresh start
+    await dinoAgent.delay(100); // give game time to settle
+    await gameProxy.jump(); // to trigger start of game
+
+    let state = await gameProxy.state();
+    while (true) { // Infinite loop to keep playing
+        const stateVector = dinoAgent.stateToVector(state);
+        const action = dinoAgent.selectAction(stateVector);
+
+        gameProxy.performAction(action); // Perform the selected action
+
+        let nextState = await gameProxy.state();
+        while (!nextState.done && nextState.time - state.time < 30) {
+            await dinoAgent.delay(5);
+            nextState = await gameProxy.state();
+        }
+
+        state = nextState; // Update the state for the next iteration
+
+        if (state.done) {
+            // If the game ended, restart and continue playing
+            await gameProxy.restart();
+            await dinoAgent.delay(100); // give game time to settle
+            await gameProxy.jump(); // to trigger start of game
+            state = await gameProxy.state();
+        }
+    }
+}
+
 module.exports = {
     setupModelTraining,
+    setupModelPlaying,
 };
