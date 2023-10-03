@@ -5,8 +5,7 @@ const colors = require('colors');
 const fs = require('fs').promises;
 const Memory = require('../src/Memory');
 const { ChromeGameProxy } = require('../src/game-mock');
-const { State } = require('../src/virtual-game');
-const NoisyDense = require('./NoisyDense');
+// const NoisyDense = require('./NoisyDense');
 const AdvantageNormalization = require('./AdvantageNormalization');
 
 // Kullback-Leibler divergence between two probability 
