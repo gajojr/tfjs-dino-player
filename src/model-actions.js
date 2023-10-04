@@ -8,24 +8,37 @@ const { ChromeGameProxy } = require('../src/game-mock');
 // const NoisyDense = require('./NoisyDense');
 const AdvantageNormalization = require('./AdvantageNormalization');
 
-// Kullback-Leibler divergence between two probability 
-// distributions of a discrete random variable.
+// Function to compute the Kullback-Leibler Divergence between two probability distributions
 function klDivergence(yTrue, yPred) {
+    // tf.tidy() is used to free any intermediate tensors created during this function
     return tf.tidy(() => {
+        // Clipping yTrue and yPred values to avoid division by zero and log(0) issues
         const yTrueClipped = tf.clipByValue(yTrue, 1e-7, 1);
         const yPredClipped = tf.clipByValue(yPred, 1e-7, 1);
+
+        // Division of yTrueClipped by yPredClipped
         const division = yTrueClipped.div(yPredClipped);
+
+        // Taking the logarithm of the division result
         const logDiv = tf.log(division);
+
+        // Multiplying logDiv with yTrueClipped and summing over the last axis to get the KL Divergence
         const klDiv = logDiv.mul(yTrueClipped).sum(-1);
+
+        // Returning the KL Divergence tensor
         return klDiv;
     });
 }
 
+// Function to compute the sum of KL Divergence values over the last axis
 function sum_kl(yTrue, yPred) {
+    // Calling klDivergence function and then summing over the last axis
     return klDivergence(yTrue, yPred).sum(-1);
 }
 
+// Function to clip a value v between a minimum and maximum value
 function clip(v, min, max) {
+    // Using Math.min and Math.max to clip the value v between min and max
     return Math.min(Math.max(v, min), max);
 }
 
@@ -127,25 +140,25 @@ class DinoAgent {
             console.error('Failed to write to logs.txt:', err.message);
         });
 
-        let highScore = 0;
+        let highScore = 0; // Variable to keep track of the high score across episodes
 
-        for (let episode = 0; episode < episodes; episode++) {
-            let episodeReward = 0;
-            let episodeSteps = 0;
+        for (let episode = 0; episode < episodes; episode++) { // Looping through each episode
+            let episodeReward = 0; // Variable to accumulate the total reward for the episode
+            let episodeSteps = 0; // Variable to count the steps taken in the episode
 
             await this.proxy.restart();
             await this.delay(100); // give game time to settle
             await this.proxy.jump(); // to trigger start of game
 
-            let state = await this.proxy.state();
+            let state = await this.proxy.state(); // Getting the initial game state
 
-            let multiStepBuffer = [];
+            let multiStepBuffer = []; // Buffer to store multiple steps for n-step Q-learning
 
-            while (!state.done) {
-                const stateVector = this.stateToVector(state);
-                const action = this.selectAction(stateVector);
+            while (!state.done) { // While the game is not over
+                const stateVector = this.stateToVector(state); // Converting state to a vector
+                const action = this.selectAction(stateVector); // Selecting an action based on the state
 
-                this.proxy.performAction(action);
+                this.proxy.performAction(action); // Performing the selected action
 
                 if (episodeSteps > 10000) {
                     console.log(this.proxy.str());
@@ -169,7 +182,7 @@ class DinoAgent {
                     nextState = await this.proxy.state();
                 }
 
-                const timeDelta = nextState.time - state.time;
+                const timeDelta = nextState.time - state.time; // Calculating the time difference between states
 
                 // Evaluate this step if and only if in time frame.
                 if (timeDelta > 40) {
@@ -233,12 +246,12 @@ class DinoAgent {
                     }
                 }
 
-                state = nextState;
+                state = nextState; // Updating the state for the next iteration
             }
 
-            this.epsilon = Math.max(this.epsilon - this.epsilonDecay, 0);
+            this.epsilon = Math.max(this.epsilon - this.epsilonDecay, 0); // Updating the exploration rate
 
-            highScore = Math.max(highScore, episodeSteps);
+            highScore = Math.max(highScore, episodeSteps); // Updating the high score if necessary
 
             // log after every episode and set episodeReward to 0
             console.log("Episode " + episode + " done, score: " + episodeSteps + " (" + highScore + ")");
@@ -253,13 +266,18 @@ class DinoAgent {
     }
 
     multiStep(multiStepBuffer) {
-        // calculate multi step reward
-        let r = 0;
+        // Calculating multi-step reward by summing up the rewards of each step,
+        // discounted by gamma raised to the power of the step index.
+        let r = 0; // Initialize the cumulative reward to 0
         for (let i = 0; i < multiStepBuffer.length; i++) {
-            r += Math.pow(this.gamma, i) * multiStepBuffer[i].reward;
+            r += Math.pow(this.gamma, i) * multiStepBuffer[i].reward; // Accumulate the discounted reward
         }
-        const first = multiStepBuffer[0];
-        const last = multiStepBuffer[multiStepBuffer.length - 1];
+
+        const first = multiStepBuffer[0]; // Getting the first step from the multi-step buffer
+        const last = multiStepBuffer[multiStepBuffer.length - 1]; // Getting the last step from the multi-step buffer
+
+        // Adding a new experience to the memory with the cumulative reward,
+        // and the state and action from the first step and the next state and done flag from the last step.
         this.memory.add({
             state: first.state,
             action: first.action,
@@ -267,17 +285,19 @@ class DinoAgent {
             nextState: last.nextState,
             done: last.done,
         });
-        // remove oldest state
+
+        // Removing the oldest step from the multi-step buffer as it has been used.
         multiStepBuffer.splice(0, 1);
     }
 
     async optimizeModel() {
-        if (this.steps % this.batchSize !== 0) {
+        if (this.steps % this.batchSize !== 0) { // This condition ensures that the optimization is performed only once every batchSize steps for performance reasons.
             // train all batchSize steps only (performance)
             this.steps++;
             return;
         }
 
+        // Sampling a batch of experiences from memory.
         const { samples, sampleIndices } = this.memory.sample(this.batchSize);
 
         // To speed up, make predictions on full batch:
@@ -286,10 +306,12 @@ class DinoAgent {
         const statesTensor = tf.tensor2d(statesVectors);
         const nextStatesTensor = tf.tensor2d(nextStatesVectors);
 
+        // Getting Q-value predictions for current and next states from both the online and target models.
         const onlineModelQValuesTensor = this.onlineModel.apply(statesTensor);
         const onlineModelNextQValuesTensor = this.onlineModel.apply(nextStatesTensor);
         const targetModelNextQValuesTensor = this.targetModel.apply(nextStatesTensor);
 
+        // Converting tensors to JavaScript arrays for further processing.
         const onlineModelQValues = onlineModelQValuesTensor.dataSync();
         const targetModelNextQValues = targetModelNextQValuesTensor.dataSync();
 
@@ -329,27 +351,37 @@ class DinoAgent {
                 i * noOfAtomsPerSample + (nextAction + 1) * this.d_atoms
             );
             // Categorical algorithm [https://arxiv.org/pdf/1707.06887.pdf]
+            // Initializing an array 'm' to store the updated probability mass function (PMF)
             const m = [];
             for (let n = 0; n < this.d_atoms; n++) {
                 m[n] = 0;
             }
             for (let j = 0; j < this.d_atoms; j++) {
                 // Compute the projection of Tzj onto the support {zi}
+                // Tzj is the clipped, discounted, and shifted next-state value for atom j
                 let Tzj;
                 if (!terminal) {
+                    // If not a terminal state, calculate Tzj using the Bellman equation
                     Tzj = clip(r + this.gamma * this.zi[j], this.Vmin, this.Vmax);
                 } else {
+                    // If a terminal state, the reward 'r' is the final value
                     Tzj = clip(r, this.Vmin, this.Vmax);
                 }
+                // bj is the normalized and shifted value of Tzj
                 const bj = (Tzj - this.Vmin) / this.delta_z;
+                // l and u are the lower and upper bounds of the index in the support
                 const l = Math.floor(bj);
                 let u = Math.ceil(bj);
+                // If l and u are the same (which is a rare case), increment u to ensure they are different
                 if (l == u) {
                     u += 1;
                 }
+                // Distributing the probability mass of atom j between indices l and u in the updated PMF
+                // This is done according to the proximity of bj to l and u
                 m[l] += p[j] * (u - bj);
                 m[u] += p[j] * (bj - l);
             }
+
 
             const index = i * noOfAtomsPerSample + action * this.d_atoms;
 
